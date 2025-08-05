@@ -15,6 +15,13 @@ ASSISTANT_ID = os.getenv("OPENAI_ASSISTANT_ID")
 openai.api_key = OPENAI_API_KEY
 logging.basicConfig(level=logging.INFO)
 
+# Конфигурация webhook
+WEBHOOK_HOST = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}"
+WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
+WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
+WEBAPP_HOST = "0.0.0.0"
+WEBAPP_PORT = int(os.getenv("PORT", 5000))
+
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
@@ -59,16 +66,21 @@ async def handle_message(message: Message):
         logging.error(f"Ошибка: {e}")
         await message.answer("Произошла ошибка при анализе. Попробуй позже.")
 
-async def main():
-    await dp.start_polling(bot)
+async def on_startup():
+    await bot.set_webhook(WEBHOOK_URL)
+    logging.info(f"Webhook установлен: {WEBHOOK_URL}")
 
-if __name__ == "__main__":
-    start_webhook(
-        dispatcher=dp,
+async def on_shutdown():
+    await bot.delete_webhook()
+    logging.info("Webhook удалён")
+
+async def main():
+    await on_startup()
+    await dp.start_webhook(
         webhook_path=WEBHOOK_PATH,
-        on_startup=on_startup,
-        on_shutdown=on_shutdown,
         host=WEBAPP_HOST,
-        port=WEBAPP_PORT,
+        port=WEBAPP_PORT
     )
 
+if __name__ == "__main__":
+    asyncio.run(main())
