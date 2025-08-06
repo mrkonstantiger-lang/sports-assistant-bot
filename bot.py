@@ -1,6 +1,5 @@
 import logging
 import os
-import sys
 import asyncio
 import openai
 from aiogram import Bot, Dispatcher, types
@@ -12,6 +11,7 @@ load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ASSISTANT_ID = os.getenv("OPENAI_ASSISTANT_ID")
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -19,19 +19,12 @@ logging.basicConfig(level=logging.INFO)
 # Настройка OpenAI
 openai.api_key = OPENAI_API_KEY
 
-lockfile = "bot.lock"
-
-# Проверяем, запущен ли уже бот
-if os.path.exists(lockfile):
-    print("Бот уже запущен! Завершаем запуск.")
-    sys.exit(1)
-else:
-    # Создаём lockfile, чтобы заблокировать повторный запуск
-    open(lockfile, 'w').close()
-
-# Инициализация бота и диспетчера
+# Инициализация бота
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
+
+# Словарь для хранения потоков пользователей
+user_threads = {}
 
 @dp.message(CommandStart())
 async def start_cmd(message: types.Message):
@@ -39,12 +32,41 @@ async def start_cmd(message: types.Message):
 
 @dp.message()
 async def handle_message(message: types.Message):
+    user_id = str(message.from_user.id)
+
+    if user_id not in user_threads:
+        thread = openai.beta.threads.create()
+        user_threads[user_id] = thread.id
+
     try:
-        response = openai.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": message.text}]
+        # Отправляем сообщение пользователя в поток
+        openai.beta.threads.messages.create(
+            thread_id=user_threads[user_id],
+            role="user",
+            content=message.text
         )
-        reply = response.choices[0].message.content
+
+        # Запускаем ассистента
+        run = openai.beta.threads.runs.create(
+            thread_id=user_threads[user_id],
+            assistant_id=ASSISTANT_ID
+        )
+
+        # Ждем завершения обработки
+        while True:
+            run_status = openai.beta.threads.runs.retrieve(
+                thread_id=user_threads[user_id],
+                run_id=run.id
+            )
+            if run_status.status == "completed":
+                break
+            await asyncio.sleep(1)
+
+        # Получаем ответ ассистента
+        messages = openai.beta.threads.messages.list(
+            thread_id=user_threads[user_id]
+        )
+        reply = messages.data[0].content[0].text.value
         await message.answer(reply)
 
     except Exception as e:
@@ -52,13 +74,8 @@ async def handle_message(message: types.Message):
         await message.answer("Произошла ошибка при анализе. Попробуй позже.")
 
 async def main():
-    try:
-        logging.info("Бот запущен...")
-        await dp.start_polling(bot)
-    finally:
-        # Удаляем lockfile при выходе из программы
-        if os.path.exists(lockfile):
-            os.remove(lockfile)
+    logging.info("Бот запущен...")
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
     asyncio.run(main())
