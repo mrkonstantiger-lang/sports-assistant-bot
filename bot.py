@@ -24,21 +24,20 @@ dp = Dispatcher()
 
 @dp.message(CommandStart())
 async def start_cmd(message: types.Message):
-    await message.answer("Привет! Я спортивный аналитик по ставкам и готов помочь тебе.")
+    await message.answer("Привет! Я готов отвечать на твои вопросы о спортивном анализе для ставок.")
 
 @dp.message()
 async def handle_message(message: types.Message):
     try:
         response = openai.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-3.5-turbo",
             messages=[
-                {"role": "system", "content": "Ты — спортивный аналитик, эксперт по ставкам на спорт. Отвечай подробно и профессионально."},
+                {"role": "system", "content": "Ты — спортивный аналитик, эксперт по ставкам на спорт. Отвечай кратко и по делу."},
                 {"role": "user", "content": message.text}
             ]
         )
         reply = response.choices[0].message.content
         await message.answer(reply)
-
     except Exception as e:
         logging.error(f"Ошибка: {e}")
         await message.answer("Произошла ошибка при анализе. Попробуй позже.")
