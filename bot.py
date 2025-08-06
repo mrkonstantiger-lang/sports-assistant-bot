@@ -1,5 +1,6 @@
 import logging
 import os
+import sys
 import asyncio
 import openai
 from aiogram import Bot, Dispatcher, types
@@ -18,7 +19,17 @@ logging.basicConfig(level=logging.INFO)
 # Настройка OpenAI
 openai.api_key = OPENAI_API_KEY
 
-# Инициализация бота
+lockfile = "bot.lock"
+
+# Проверяем, запущен ли уже бот
+if os.path.exists(lockfile):
+    print("Бот уже запущен! Завершаем запуск.")
+    sys.exit(1)
+else:
+    # Создаём lockfile, чтобы заблокировать повторный запуск
+    open(lockfile, 'w').close()
+
+# Инициализация бота и диспетчера
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
@@ -41,8 +52,13 @@ async def handle_message(message: types.Message):
         await message.answer("Произошла ошибка при анализе. Попробуй позже.")
 
 async def main():
-    logging.info("Бот запущен...")
-    await dp.start_polling(bot)
+    try:
+        logging.info("Бот запущен...")
+        await dp.start_polling(bot)
+    finally:
+        # Удаляем lockfile при выходе из программы
+        if os.path.exists(lockfile):
+            os.remove(lockfile)
 
 if __name__ == "__main__":
     asyncio.run(main())
