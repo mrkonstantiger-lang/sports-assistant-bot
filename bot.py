@@ -1,9 +1,9 @@
 import logging
-import openai
-import asyncio
 import os
+import asyncio
+import openai
 from aiogram import Bot, Dispatcher, types
-from aiogram.types import Message
+from aiogram.filters import CommandStart
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -15,19 +15,17 @@ ASSISTANT_ID = os.getenv("OPENAI_ASSISTANT_ID")
 openai.api_key = OPENAI_API_KEY
 logging.basicConfig(level=logging.INFO)
 
-WEBHOOK_HOST = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}"
-WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
-WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
-WEBAPP_HOST = "0.0.0.0"
-WEBAPP_PORT = int(os.getenv("PORT", 5000))
-
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher(bot)
+dp = Dispatcher()
 
 user_threads = {}
 
-@dp.message_handler()
-async def handle_message(message: Message):
+@dp.message(CommandStart())
+async def start_cmd(message: types.Message):
+    await message.answer("Привет! Я готов отвечать на твои вопросы.")
+
+@dp.message()
+async def handle_message(message: types.Message):
     user_id = str(message.from_user.id)
 
     if user_id not in user_threads:
@@ -54,6 +52,23 @@ async def handle_message(message: Message):
             if run_status.status == "completed":
                 break
             await asyncio.sleep(1)
+
+        messages = openai.beta.threads.messages.list(
+            thread_id=user_threads[user_id]
+        )
+        reply = messages.data[0].content[0].text.value
+        await message.answer(reply)
+
+    except Exception as e:
+        logging.error(f"Ошибка: {e}")
+        await message.answer("Произошла ошибка при анализе. Попробуй позже.")
+
+async def main():
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
+
 
         messages = openai.beta.threads.messages.list(
             thread_id=user_threads[user_id]
