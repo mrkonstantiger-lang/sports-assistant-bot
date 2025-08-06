@@ -24,15 +24,15 @@ dp = Dispatcher()
 
 @dp.message(CommandStart())
 async def start_cmd(message: types.Message):
-    await message.answer("Привет! Я готов отвечать на твои вопросы о спортивном анализе для ставок.")
+    await message.answer("Привет! Я готов давать тебе спортивную аналитику для ставок.")
 
 @dp.message()
 async def handle_message(message: types.Message):
     try:
         response = openai.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model="gpt-4o",
             messages=[
-                {"role": "system", "content": "Ты — спортивный аналитик, эксперт по ставкам на спорт. Отвечай кратко и по делу."},
+                {"role": "system", "content": "Ты — опытный спортивный аналитик, эксперт по ставкам на спорт. Даёшь краткие и точные прогнозы с аргументацией."},
                 {"role": "user", "content": message.text}
             ]
         )
