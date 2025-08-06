@@ -2,7 +2,7 @@ import logging
 import openai
 import asyncio
 import os
-from aiogram import Bot, Dispatcher
+from aiogram import Bot, Dispatcher, types
 from aiogram.types import Message
 from dotenv import load_dotenv
 
@@ -15,7 +15,6 @@ ASSISTANT_ID = os.getenv("OPENAI_ASSISTANT_ID")
 openai.api_key = OPENAI_API_KEY
 logging.basicConfig(level=logging.INFO)
 
-# Конфигурация webhook
 WEBHOOK_HOST = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}"
 WEBHOOK_PATH = f"/webhook/{BOT_TOKEN}"
 WEBHOOK_URL = f"{WEBHOOK_HOST}{WEBHOOK_PATH}"
@@ -23,11 +22,11 @@ WEBAPP_HOST = "0.0.0.0"
 WEBAPP_PORT = int(os.getenv("PORT", 5000))
 
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+dp = Dispatcher(bot)
 
 user_threads = {}
 
-@dp.message()
+@dp.message_handler()
 async def handle_message(message: Message):
     user_id = str(message.from_user.id)
 
@@ -79,7 +78,8 @@ async def main():
     await dp.start_webhook(
         webhook_path=WEBHOOK_PATH,
         host=WEBAPP_HOST,
-        port=WEBAPP_PORT
+        port=WEBAPP_PORT,
+        on_shutdown=on_shutdown,
     )
 
 if __name__ == "__main__":
