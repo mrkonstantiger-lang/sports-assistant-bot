@@ -55,7 +55,7 @@ def save_message(user_id: int, role: str, content: str):
     conn.commit()
     conn.close()
 
-def get_user_history(user_id, limit=5):  # уменьшил limit для оптимизации
+def get_user_history(user_id, limit=20):
     conn = sqlite3.connect("chat_history.db")
     cursor = conn.cursor()
     cursor.execute('''
@@ -137,28 +137,21 @@ async def get_next_match(team_name: str):
     async with httpx.AsyncClient() as client:
         url_team = f"https://www.thesportsdb.com/api/v1/json/{THE_SPORTS_DB_API_KEY}/searchteams.php?t={team_name}"
         res_team = await client.get(url_team)
-        try:
-            data_team = res_team.json()
-        except Exception as e:
-            logging.error(f"Ошибка при парсинге JSON TheSportsDB team: {e}")
+        if res_team.status_code != 200:
             return None
-
+        data_team = res_team.json()
         if not data_team or not data_team.get("teams"):
             return None
         team_id = data_team["teams"][0]["idTeam"]
 
         url_events = f"https://www.thesportsdb.com/api/v1/json/{THE_SPORTS_DB_API_KEY}/eventsnext.php?id={team_id}"
         res_events = await client.get(url_events)
-        try:
-            data_events = res_events.json()
-        except Exception as e:
-            logging.error(f"Ошибка при парсинге JSON TheSportsDB events: {e}")
+        if res_events.status_code != 200:
             return None
-
+        data_events = res_events.json()
         events = data_events.get("events", [])
         if not events:
             return None
-
         next_event = events[0]
         return {
             "date": next_event.get("dateEvent", "неизвестна"),
@@ -167,6 +160,22 @@ async def get_next_match(team_name: str):
             "away_team": next_event.get("strAwayTeam", ""),
             "league": next_event.get("strLeague", "")
         }
+
+async def get_openai_response(messages):
+    try:
+        response = await openai.ChatCompletion.acreate(
+            model="gpt-4o-mini",
+            messages=messages,
+            max_tokens=800,
+            temperature=0.7,
+            top_p=1,
+            frequency_penalty=0,
+            presence_penalty=0
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logging.error(f"OpenAI error: {e}")
+        return "Ошибка при обработке запроса к OpenAI."
 
 @dp.message(CommandStart())
 async def start_cmd(message: types.Message):
@@ -181,6 +190,8 @@ async def handle_message(message: types.Message):
     user_id = message.from_user.id
     user_text = message.text
 
+    await message.answer("Получил твой запрос! Работаю над прогнозом...")
+
     try:
         save_message(user_id, "user", user_text)
 
@@ -190,7 +201,6 @@ async def handle_message(message: types.Message):
             role_prompt = SPORTS_ANALYST_PROMPT
 
         match_teams, match_date, match_time = extract_match_info(user_text)
-
         team_name = match_teams.split(" — ")[0] if " — " in match_teams else None
 
         external_info = ""
@@ -205,27 +215,21 @@ async def handle_message(message: types.Message):
                     f"время {next_match['time']}."
                 )
 
-        history = get_user_history(user_id, limit=5)  # Ограничиваем историю для оптимизации
+        history = get_user_history(user_id)
         history.append({"role": "user", "content": user_text + external_info})
 
         messages = [{"role": "system", "content": role_prompt}] + history
 
-        response = await openai.ChatCompletion.acreate(
-            model="gpt-4o-mini",
-            messages=messages,
-            temperature=0.7,
-            max_tokens=300,
-        )
+        response_text = await get_openai_response(messages)
 
-        answer = response.choices[0].message.content.strip()
-        save_message(user_id, "assistant", answer)
-        await message.answer(answer)
+        save_message(user_id, "assistant", response_text)
+
+        await message.answer(response_text)
 
     except Exception as e:
-        logging.error(f"Ошибка OpenAI: {e}")
-        await message.answer(f"Произошла ошибка при обработке запроса: {e}")
+        logging.error(f"Ошибка обработки сообщения: {e}")
+        await message.answer("Произошла ошибка при обработке запроса.")
 
 if __name__ == "__main__":
-    import asyncio
-    from aiogram import executor
-    executor.start_polling(dp, skip_updates=True)
+    asyncio.run(dp.start_polling(bot))
+
