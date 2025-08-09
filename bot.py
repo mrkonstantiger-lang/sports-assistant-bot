@@ -24,7 +24,7 @@ openai.api_key = OPENAI_API_KEY
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# ===== Промт для краткого прогноза =====
+# ===== Промты =====
 SPORTS_ANALYST_PROMPT = """
 Ты — спортивный ИИ-аналитик, встроенный в Telegram-бота.
 
@@ -44,7 +44,6 @@ SPORTS_ANALYST_PROMPT = """
 💰 Ставка(и):
 """
 
-# ===== Промт для развёрнутого анализа =====
 DETAILED_ANALYST_PROMPT = """
 Ты — опытный спортивный аналитик с многолетним опытом прогнозирования исходов спортивных событий и анализа ставок.
 
@@ -58,6 +57,22 @@ DETAILED_ANALYST_PROMPT = """
 
 Пиши в экспертной манере, но доступно и понятно.
 """
+
+# ===== Хранилище истории сообщений в памяти =====
+# Ключ — user_id, значение — список сообщений вида {"role": "user"/"assistant", "content": "текст"}
+user_histories = {}
+
+# Максимальное количество сообщений для истории
+MAX_HISTORY_MESSAGES = 10
+
+# ===== Функция для добавления сообщений в историю =====
+def add_message_to_history(user_id: int, role: str, content: str):
+    if user_id not in user_histories:
+        user_histories[user_id] = []
+    user_histories[user_id].append({"role": role, "content": content})
+    # Ограничиваем размер истории
+    if len(user_histories[user_id]) > MAX_HISTORY_MESSAGES:
+        user_histories[user_id] = user_histories[user_id][-MAX_HISTORY_MESSAGES:]
 
 # ===== Функция извлечения информации из текста =====
 def extract_match_info(user_text: str):
@@ -89,6 +104,8 @@ def extract_match_info(user_text: str):
 # ===== Команда /start =====
 @dp.message(CommandStart())
 async def start_cmd(message: types.Message):
+    user_id = message.from_user.id
+    user_histories.pop(user_id, None)  # Очистить историю при старте
     await message.answer(
         "Привет! Я твой спортивный аналитик 📊\n"
         "Напиши матч, и я дам краткий прогноз и ставки.\n"
@@ -98,33 +115,42 @@ async def start_cmd(message: types.Message):
 # ===== Обработка сообщений =====
 @dp.message()
 async def handle_message(message: types.Message):
+    user_id = message.from_user.id
+    user_text = message.text.strip()
+
+    # Определяем, нужен ли подробный анализ
+    detailed_requested = any(word in user_text.lower() for word in ["почему", "объясни", "поясни"])
+
+    # Выбираем системный промт
+    role_prompt = DETAILED_ANALYST_PROMPT if detailed_requested else SPORTS_ANALYST_PROMPT
+
+    # Извлекаем матч-инфо
+    match_teams, match_date, match_time = extract_match_info(user_text)
+
+    # Формируем содержимое пользователя для отправки в OpenAI
+    user_content = (
+        f"Матч: {match_teams}\n"
+        f"Дата: {match_date}\n"
+        f"Время: {match_time}\n"
+        f"Запрос: {user_text}"
+    )
+
+    # Добавляем пользовательское сообщение в историю
+    add_message_to_history(user_id, "user", user_content)
+
+    # Формируем список сообщений для OpenAI (системный + история)
+    messages = [{"role": "system", "content": role_prompt}] + user_histories[user_id]
+
     try:
-        # Выбор промта
-        if any(word in message.text.lower() for word in ["почему", "объясни", "поясни"]):
-            role_prompt = DETAILED_ANALYST_PROMPT
-        else:
-            role_prompt = SPORTS_ANALYST_PROMPT
-
-        # Извлекаем данные
-        match_teams, match_date, match_time = extract_match_info(message.text)
-
-        # Формируем контекст
-        user_content = (
-            f"Матч: {match_teams}\n"
-            f"Дата: {match_date}\n"
-            f"Время: {match_time}\n"
-            f"Запрос: {message.text}"
-        )
-
-        # Запрос к OpenAI
         response = openai.chat.completions.create(
             model="gpt-4o",
-            messages=[
-                {"role": "system", "content": role_prompt},
-                {"role": "user", "content": user_content}
-            ]
+            messages=messages
         )
         reply = response.choices[0].message.content
+
+        # Добавляем ответ ассистента в историю
+        add_message_to_history(user_id, "assistant", reply)
+
         await message.answer(reply)
 
     except Exception as e:
