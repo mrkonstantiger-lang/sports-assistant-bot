@@ -10,24 +10,18 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
 from dotenv import load_dotenv
 
-# Загружаем переменные окружения
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-THE_SPORTS_DB_API_KEY = os.getenv("THE_SPORTS_DB_API_KEY")
+THE_SPORTS_DB_API_KEY = os.getenv("THE_SPORTS_DB_API_KEY")  # Твой ключ от TheSportsDB
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO)
-
-# Настройка OpenAI
 openai.api_key = OPENAI_API_KEY
 
-# Инициализация бота
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Создаем БД и таблицу, если не существует
 def init_db():
     conn = sqlite3.connect("chat_history.db")
     cursor = conn.cursor()
@@ -130,27 +124,39 @@ def extract_match_info(user_text: str):
 
     return match_teams, match_date, match_time
 
-# Асинхронная функция получения следующих матчей команды из TheSportsDB
+# Вот здесь происходит запрос к TheSportsDB
 async def get_next_match(team_name: str):
     if not THE_SPORTS_DB_API_KEY:
         return None
     async with httpx.AsyncClient() as client:
-        # Получаем ID команды
+        # Запрос для поиска команды
         url_team = f"https://www.thesportsdb.com/api/v1/json/{THE_SPORTS_DB_API_KEY}/searchteams.php?t={team_name}"
-        res_team = await client.get(url_team)
-        data_team = res_team.json()
+        try:
+            res_team = await client.get(url_team)
+            res_team.raise_for_status()
+            data_team = res_team.json()
+        except Exception as e:
+            logging.error(f"Ошибка запроса команды TheSportsDB: {e}")
+            return None
+
         if not data_team or not data_team.get("teams"):
             return None
+
         team_id = data_team["teams"][0]["idTeam"]
 
-        # Получаем следующие события команды
+        # Запрос следующих матчей команды
         url_events = f"https://www.thesportsdb.com/api/v1/json/{THE_SPORTS_DB_API_KEY}/eventsnext.php?id={team_id}"
-        res_events = await client.get(url_events)
-        data_events = res_events.json()
+        try:
+            res_events = await client.get(url_events)
+            res_events.raise_for_status()
+            data_events = res_events.json()
+        except Exception as e:
+            logging.error(f"Ошибка запроса матчей TheSportsDB: {e}")
+            return None
+
         events = data_events.get("events", [])
         if not events:
             return None
-        # Возьмем ближайший матч
         next_event = events[0]
         return {
             "date": next_event.get("dateEvent", "неизвестна"),
@@ -176,16 +182,12 @@ async def handle_message(message: types.Message):
     try:
         save_message(user_id, "user", user_text)
 
-        # Выбор промта
         if any(word in user_text.lower() for word in ["почему", "объясни", "поясни"]):
             role_prompt = DETAILED_ANALYST_PROMPT
         else:
             role_prompt = SPORTS_ANALYST_PROMPT
 
-        # Извлекаем команды из сообщения
         match_teams, match_date, match_time = extract_match_info(user_text)
-
-        # Для примера возьмем первую команду из пары (если есть)
         team_name = match_teams.split(" — ")[0] if " — " in match_teams else None
 
         external_info = ""
@@ -200,28 +202,27 @@ async def handle_message(message: types.Message):
                     f"время {next_match['time']}."
                 )
 
-        # Формируем контекст с историей и внешними данными
         history = get_user_history(user_id)
         history.append({"role": "user", "content": user_text + external_info})
 
         messages = [{"role": "system", "content": role_prompt}] + history
 
-        response = openai.chat.completions.create(
-            model="gpt-4o",
+        # Запрос к OpenAI
+        response = await openai.ChatCompletion.acreate(
+            model="gpt-4o-mini",
             messages=messages
         )
-        reply = response.choices[0].message.content
+        answer = response.choices[0].message.content
 
-        save_message(user_id, "assistant", reply)
-        await message.answer(reply)
+        save_message(user_id, "assistant", answer)
+
+        await message.answer(answer)
 
     except Exception as e:
         logging.error(f"Ошибка: {e}")
-        await message.answer("Произошла ошибка при анализе. Попробуй позже.")
-
-async def main():
-    logging.info("Бот запущен...")
-    await dp.start_polling(bot)
+        await message.answer("Произошла ошибка при обработке запроса. Попробуй ещё раз.")
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import asyncio
+    from aiogram import executor
+    executor.start_polling(dp, skip_updates=True)
