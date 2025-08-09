@@ -10,24 +10,19 @@ from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
 from dotenv import load_dotenv
 
-# Загружаем переменные окружения
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 THE_SPORTS_DB_API_KEY = os.getenv("THE_SPORTS_DB_API_KEY")
 
-# Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
-# Настройка OpenAI
 openai.api_key = OPENAI_API_KEY
 
-# Инициализация бота
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+dp = Dispatcher(bot)  # Обязательно передать bot
 
-# Создаем БД и таблицу, если не существует
 def init_db():
     conn = sqlite3.connect("chat_history.db")
     cursor = conn.cursor()
@@ -130,7 +125,6 @@ def extract_match_info(user_text: str):
 
     return match_teams, match_date, match_time
 
-# Асинхронная функция получения следующих матчей команды из TheSportsDB
 async def get_next_match(team_name: str):
     if not THE_SPORTS_DB_API_KEY:
         return None
@@ -231,5 +225,6 @@ async def handle_message(message: types.Message):
         await message.answer("Произошла ошибка при обработке запроса.")
 
 if __name__ == "__main__":
-    asyncio.run(dp.start_polling(bot))
+    import asyncio
+    asyncio.run(dp.start_polling())
 
