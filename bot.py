@@ -4,11 +4,13 @@ import asyncio
 import re
 import sqlite3
 from datetime import datetime, timedelta
-import openai
+from dotenv import load_dotenv
 import httpx
+
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
-from dotenv import load_dotenv
+
+from openai import OpenAI  # Новый импорт клиента OpenAI
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -20,10 +22,10 @@ THE_SPORTS_DB_API_KEY = os.getenv("THE_SPORTS_DB_API_KEY")
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
 
-# Настройка OpenAI
-openai.api_key = OPENAI_API_KEY
+# Инициализация OpenAI клиента
+client = OpenAI(api_key=OPENAI_API_KEY)
 
-# Инициализация бота и диспетчера (aiogram 3.x)
+# Инициализация бота и диспетчера
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
@@ -163,7 +165,7 @@ async def get_next_match(team_name: str):
 
 async def get_openai_response(messages):
     try:
-        response = await openai.ChatCompletion.acreate(
+        response = await client.chat.completions.acreate(
             model="gpt-4o-mini",
             messages=messages,
             max_tokens=800,
