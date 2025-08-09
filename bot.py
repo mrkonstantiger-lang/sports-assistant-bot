@@ -6,11 +6,9 @@ import sqlite3
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import httpx
-
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
-
-from openai import OpenAI  # Новый импорт клиента OpenAI
+from openai import OpenAI
 
 # Загружаем переменные окружения
 load_dotenv()
@@ -19,7 +17,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 THE_SPORTS_DB_API_KEY = os.getenv("THE_SPORTS_DB_API_KEY")
 
-# Настройка логирования
+# Логирование
 logging.basicConfig(level=logging.INFO)
 
 # Инициализация OpenAI клиента
@@ -29,7 +27,7 @@ client = OpenAI(api_key=OPENAI_API_KEY)
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# Создаем БД и таблицу, если не существует
+# Создание БД
 def init_db():
     conn = sqlite3.connect("chat_history.db")
     cursor = conn.cursor()
@@ -132,7 +130,7 @@ def extract_match_info(user_text: str):
 
     return match_teams, match_date, match_time
 
-# Асинхронная функция получения следующих матчей команды из TheSportsDB
+# Получение следующего матча команды из TheSportsDB
 async def get_next_match(team_name: str):
     if not THE_SPORTS_DB_API_KEY:
         return None
@@ -163,9 +161,11 @@ async def get_next_match(team_name: str):
             "league": next_event.get("strLeague", "")
         }
 
+# Обёртка синхронного метода openai в async
 async def get_openai_response(messages):
     try:
-        response = await client.chat.completions.acreate(
+        response = await asyncio.to_thread(
+            client.chat.completions.create,
             model="gpt-4o-mini",
             messages=messages,
             max_tokens=800,
