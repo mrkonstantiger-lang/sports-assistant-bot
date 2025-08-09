@@ -202,7 +202,26 @@ async def handle_message(message: types.Message):
 
         # Формируем контекст с историей и внешними данными
         history = get_user_history(user_id)
-        # Добавляем текущий запрос + external info в одно сообщение
         history.append({"role": "user", "content": user_text + external_info})
 
         messages = [{"role": "system", "content": role_prompt}] + history
+
+        response = openai.chat.completions.create(
+            model="gpt-4o",
+            messages=messages
+        )
+        reply = response.choices[0].message.content
+
+        save_message(user_id, "assistant", reply)
+        await message.answer(reply)
+
+    except Exception as e:
+        logging.error(f"Ошибка: {e}")
+        await message.answer("Произошла ошибка при анализе. Попробуй позже.")
+
+async def main():
+    logging.info("Бот запущен...")
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
