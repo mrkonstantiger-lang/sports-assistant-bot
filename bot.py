@@ -1,15 +1,21 @@
 import logging
+import os
 import asyncio
 import re
+import sqlite3
 from datetime import datetime, timedelta
 import openai
+import httpx
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import CommandStart
+from dotenv import load_dotenv
 
-# ВАЖНО: впиши сюда свои реальные ключи
-BOT_TOKEN = "твой_токен_бота"
-OPENAI_API_KEY = "твой_ключ_openai"
-ODDS_API_KEY = "твой_ключ_odds_api"  # если используешь Odds API
+# Загружаем переменные окружения
+load_dotenv()
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+THE_SPORTS_DB_API_KEY = os.getenv("THE_SPORTS_DB_API_KEY")
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO)
@@ -21,27 +27,73 @@ openai.api_key = OPENAI_API_KEY
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# ===== Промт для краткого прогноза =====
+# Создаем БД и таблицу, если не существует
+def init_db():
+    conn = sqlite3.connect("chat_history.db")
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            role TEXT,
+            content TEXT,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_db()
+
+def save_message(user_id: int, role: str, content: str):
+    conn = sqlite3.connect("chat_history.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO messages (user_id, role, content) VALUES (?, ?, ?)",
+        (user_id, role, content)
+    )
+    conn.commit()
+    conn.close()
+
+def get_user_history(user_id, limit=20):
+    conn = sqlite3.connect("chat_history.db")
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT role, content FROM messages
+        WHERE user_id = ?
+        ORDER BY timestamp DESC
+        LIMIT ?
+    ''', (user_id, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    return [{"role": role, "content": content} for role, content in reversed(rows)]
+
 SPORTS_ANALYST_PROMPT = """
 Ты — спортивный ИИ-аналитик, встроенный в Telegram-бота.
 
-Твоя задача — давать чёткий, краткий и структурированный прогноз на матч:
-- Укажи команды, дату и время встречи (если известно).
-- Выведи итоговый прогноз: кто победит или какой исход наиболее вероятен.
-- Предложи 1–2 ставки (П1, ТБ 2.5, ОЗ, Фора и т.д.) и укажи примерные коэффициенты.
-- Пиши в телеграм-стиле, добавляй эмодзи по смыслу (⚽️📊🔥🍀).
-- Не давай длинных объяснений, если пользователь об этом не просил.
-- Если пользователь попросит пояснение ("почему", "объясни", "поясни" и т.п.), тогда дай подробный разбор: форма команд, ключевые игроки, тактика, статистика.
+Всегда пиши ответ строго по этому шаблону и не отклоняйся от него.  
+Не добавляй текст вне этих блоков и не меняй их порядок.  
 
-Всегда начинай с блока прогноза и ставок, как будто это сообщение от профессионального каппера в Telegram.
 Формат:
-📅 Дата/время:
-⚔️ Матч:
-📊 Прогноз:
-💰 Ставка(и):
+📅 Дата: [дата матча]  
+⚔️ Матч: [команда 1] — [команда 2]  
+📊 Прогноз: [краткий прогноз, кто победит или вероятный исход]  
+
+💰 Ставка 1: [ставка] с коэффициентом ~[коэф]  
+💰 Ставка 2: [ставка] с коэффициентом ~[коэф]  
+
+🔥 Краткий комментарий аналитика: [1–2 предложения о форме команд, ключевых факторах, без лишней воды]  
+
+🍀 Пожелание: [краткое мотивирующее пожелание в спортивном стиле, например "Удачи! Ставь с умом! ⚽️🔥"]
+
+Правила:
+- Обязательно заполняй все поля.
+- Даты и команды должны совпадать с запросом пользователя.
+- Пиши в телеграм-стиле с эмодзи.
+- Никаких длинных пояснений, только краткий комментарий.
+- Пожелание всегда в конце.
 """
 
-# ===== Промт для развёрнутого анализа =====
 DETAILED_ANALYST_PROMPT = """
 Ты — опытный спортивный аналитик.
 
@@ -56,12 +108,9 @@ DETAILED_ANALYST_PROMPT = """
 Пиши кратко, понятно, без лишних деталей, но с достаточным объяснением.
 """
 
-# ===== Функция извлечения информации из текста =====
 def extract_match_info(user_text: str):
-    """Извлекает команды, дату и время из текста пользователя"""
     today = datetime.now()
 
-    # Дата
     if "сегодня" in user_text.lower():
         match_date = today.strftime("%d.%m.%Y")
     elif "завтра" in user_text.lower():
@@ -72,18 +121,45 @@ def extract_match_info(user_text: str):
         date_match = re.search(r"\d{1,2}[./-]\d{1,2}([./-]\d{2,4})?", user_text)
         match_date = date_match.group() if date_match else "дата неизвестна"
 
-    # Время (форматы: 19:00, 19.00, 19-00)
     time_match = re.search(r"\b\d{1,2}[:.\-]\d{2}\b", user_text)
     match_time = time_match.group() if time_match else "время неизвестно"
 
-    # Команды
     teams = re.split(r"\s?[-—]\s?| vs | против ", user_text, flags=re.IGNORECASE)
     teams = [t.strip() for t in teams if t.strip()]
     match_teams = " — ".join(teams) if len(teams) >= 2 else "команды не указаны"
 
     return match_teams, match_date, match_time
 
-# ===== Команда /start =====
+# Асинхронная функция получения следующих матчей команды из TheSportsDB
+async def get_next_match(team_name: str):
+    if not THE_SPORTS_DB_API_KEY:
+        return None
+    async with httpx.AsyncClient() as client:
+        # Получаем ID команды
+        url_team = f"https://www.thesportsdb.com/api/v1/json/{THE_SPORTS_DB_API_KEY}/searchteams.php?t={team_name}"
+        res_team = await client.get(url_team)
+        data_team = res_team.json()
+        if not data_team or not data_team.get("teams"):
+            return None
+        team_id = data_team["teams"][0]["idTeam"]
+
+        # Получаем следующие события команды
+        url_events = f"https://www.thesportsdb.com/api/v1/json/{THE_SPORTS_DB_API_KEY}/eventsnext.php?id={team_id}"
+        res_events = await client.get(url_events)
+        data_events = res_events.json()
+        events = data_events.get("events", [])
+        if not events:
+            return None
+        # Возьмем ближайший матч
+        next_event = events[0]
+        return {
+            "date": next_event.get("dateEvent", "неизвестна"),
+            "time": next_event.get("strTime", "время неизвестно"),
+            "home_team": next_event.get("strHomeTeam", ""),
+            "away_team": next_event.get("strAwayTeam", ""),
+            "league": next_event.get("strLeague", "")
+        }
+
 @dp.message(CommandStart())
 async def start_cmd(message: types.Message):
     await message.answer(
@@ -92,46 +168,41 @@ async def start_cmd(message: types.Message):
         "Если хочешь подробности — напиши 'почему' или 'объясни'."
     )
 
-# ===== Обработка сообщений =====
 @dp.message()
 async def handle_message(message: types.Message):
+    user_id = message.from_user.id
+    user_text = message.text
+
     try:
+        save_message(user_id, "user", user_text)
+
         # Выбор промта
-        if any(word in message.text.lower() for word in ["почему", "объясни", "поясни"]):
+        if any(word in user_text.lower() for word in ["почему", "объясни", "поясни"]):
             role_prompt = DETAILED_ANALYST_PROMPT
         else:
             role_prompt = SPORTS_ANALYST_PROMPT
 
-        # Извлекаем данные
-        match_teams, match_date, match_time = extract_match_info(message.text)
+        # Извлекаем команды из сообщения
+        match_teams, match_date, match_time = extract_match_info(user_text)
 
-        # Формируем контекст
-        user_content = (
-            f"Матч: {match_teams}\n"
-            f"Дата: {match_date}\n"
-            f"Время: {match_time}\n"
-            f"Запрос: {message.text}"
-        )
+        # Для примера возьмем первую команду из пары (если есть)
+        team_name = match_teams.split(" — ")[0] if " — " in match_teams else None
 
-        # Запрос к OpenAI
-        response = openai.chat.completions.create(
-            model="gpt-4o",
-            messages=[
-                {"role": "system", "content": role_prompt},
-                {"role": "user", "content": user_content}
-            ]
-        )
-        reply = response.choices[0].message.content
-        await message.answer(reply)
+        external_info = ""
+        if team_name:
+            next_match = await get_next_match(team_name)
+            if next_match:
+                external_info = (
+                    f"\n\nИнформация из TheSportsDB:\n"
+                    f"Следующий матч команды {team_name}:\n"
+                    f"{next_match['home_team']} — {next_match['away_team']} "
+                    f"в лиге {next_match['league']} на дату {next_match['date']} "
+                    f"время {next_match['time']}."
+                )
 
-    except Exception as e:
-        logging.error(f"Ошибка: {e}")
-        await message.answer("Произошла ошибка при анализе. Попробуй позже.")
+        # Формируем контекст с историей и внешними данными
+        history = get_user_history(user_id)
+        # Добавляем текущий запрос + external info в одно сообщение
+        history.append({"role": "user", "content": user_text + external_info})
 
-# ===== Запуск =====
-async def main():
-    logging.info("Бот запущен...")
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+        messages = [{"role": "system", "content": role_prompt}] + history
